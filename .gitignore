@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Environment variables
+.env
+*.env
+
+# Streamlit
+.streamlit/
+
+# FastAPI / Logs
+*.log
+
+# OS & IDE files
+.DS_Store
+.vscode/
+.idea/

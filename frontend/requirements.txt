@@ -1,0 +1,13 @@
+streamlit
+requests
+python-dotenv
+reportlab
+pillow
+langchain
+langchain-community
+langchain_google_genai
+faiss-cpu
+fastapi
+uvicorn
+pydantic
+dotenv
