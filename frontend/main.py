@@ -1,5 +1,4 @@
 import streamlit as st
-import requests
 import json
 import io
 from reportlab.lib.pagesizes import letter
@@ -198,14 +197,6 @@ def create_pdf(summary_text: str, employee_id: str) -> bytes:
     return buffer.read()
 # ------------------------------
 
-# Initialize state for summary and employee (for persistent display)
-if 'summary_report' not in st.session_state:
-    st.session_state.summary_report = "Summary will appear here after generation. \n\nThe AI analyzes the provided logs and the employee's performance data, highlighting key strengths, areas for improvement, and notable achievements."
-if 'employee_id' not in st.session_state:
-    st.session_state.employee_id = "E001"
-if 'logs_input' not in st.session_state:
-    st.session_state.logs_input = ""
-
 
 
 # --- Main Two-Column Layout ---
@@ -216,13 +207,9 @@ with col1:
     st.subheader("Generate Evaluation")
      # --- Sample Buttons ---
     col_btn1, col_btn2 = st.columns(2)
+    default_logs=""
     
-    if "logs_input" not in st.session_state:
-        st.session_state.logs_input = ""
-
-    with col_btn1:
-        if st.button("Insert Sample Logs 1"):
-            st.session_state.logs_input = """Employee E001 is a Data Scientist. 
+    sample_logs_1="""Employee E001 is a Data Scientist. 
 On 11th September, they completed 11 tasks, made 5 commits, fixed 2 bugs, implemented 2 features, 
 created 4 reports, attended 1 meeting, and worked actively for 6.1 hours. 
 Manager’s review: Excellent. They also ran 2 experiments.
@@ -243,9 +230,7 @@ Employee E005 is a QA Engineer.
 On 11th September, they completed 10 tasks, executed 35 test cases, logged 6 bugs, verified 3 bug fixes, wrote 2 automation scripts, attended 1 meeting, and worked actively for 6.5 hours.
 Manager’s review: Very Good. They also prepared 1 test plan."""
 
-    with col_btn2:
-        if st.button("Insert Sample Logs 2"):
-            st.session_state.logs_input = """Employee E006 is a UI/UX Designer.
+    sample_logs_2 = """Employee E006 is a UI/UX Designer.
 On 12th September, they completed 6 tasks, created 3 wireframes, designed 2 prototypes, reviewed 1 design audit, collaborated on 2 feedback sessions, attended 2 meetings, and worked actively for 6.8 hours.
 Manager’s review: Excellent. They also updated 1 design guideline document.
 
@@ -263,28 +248,36 @@ On 14th September, they completed 9 tasks, deployed 1 release, fixed 2 monitorin
 Employee E010 is a QA Engineer.
 On 13th September, they completed 11 tasks, executed 42 test cases, logged 7 bugs, verified 4 bug fixes, created 2 regression test suites, attended 1 meeting, and worked actively for 6.3 hours.
 Manager’s review: Very Good. They also updated 1 automation framework."""
+
+    
+    logs_input=""
+
+    with col_btn1:
+        if st.button("Insert Sample Logs 1"):
+           default_logs=sample_logs_1
+    with col_btn2:
+        if st.button("Insert Sample Logs 2"):
+           default_logs=sample_logs_2
     
    
-    # Text Area for User Input/Logs (RAG Query)
-    st.text_area(
-        "Enter your company's employee performance logs or relevant data:", 
-        height=180, 
-        placeholder="e.g., Provide a balanced performance review...",
-        key="logs_input"
+     # Text Area (if no button pressed, it stays empty)
+    logs_input = st.text_area(
+        "Enter your company's employee performance logs or relevant data:",
+        value=default_logs if default_logs else st.session_state.get("_logs_backup", ""),
+        height=180,
+        placeholder="e.g., Provide a balanced performance review..."
     )
+    
+     # Save current input as backup to survive re-runs
+    st.session_state["_logs_backup"] = logs_input
     
 
     # Dropdown for Employee Name
     employees = ["E001", "E002", "E003", "E004","E005", "E006", "E007", "E008", "E009", "E010"]
-    st.session_state.employee_id = st.selectbox(
-        "Select Employee:", 
-        employees, 
-        key="employee_select"
-    )
+    employee_id = st.selectbox("Select Employee:", employees)
 
     st.markdown("---")
-    
-    # Action button
+
     generate_btn = st.button("Generate Summary")
 
 
@@ -292,90 +285,30 @@ Manager’s review: Very Good. They also updated 1 automation framework."""
 with col2:
     st.subheader("Evaluation Summary")
 
-    # 1. Create a placeholder for the dynamic summary content
-    # This placeholder will be updated inside the if generate_btn block.
-    summary_placeholder = st.empty() 
-    
-    # 2. Display the initial content (or previous content) using the placeholder
-    initial_summary_box_html = f"<div class='report-box'>{st.session_state.summary_report}</div>"
-    summary_placeholder.markdown(initial_summary_box_html, unsafe_allow_html=True)
-    
-    # Download button placeholder (will be activated after generation)
-    download_placeholder = st.empty()
+    if generate_btn:
+        if not logs_input:
+            st.warning("⚠️ Please enter logs first.")
+        else:
+            with st.spinner(f"🔎 Analyzing logs for {employee_id}..."):
+                try:
+                    payload = {"employee_name": employee_id, "logs": logs_input}
+                    data=generate_report(payload)
+                    summary_report = data.get("report", "Error: No report returned from API.")
+                    st.success("✅ Report generated successfully!")
+                    st.write(data["report"])
+                except Exception as e:
+                    st.error(f"❌ API error: {e}")
+                    summary_report = "Summary generation failed."
 
+            st.success(f"✅ Summary generated for {employee_id}")
+            # st.markdown(f"<div class='report-box'>{summary_report}</div>", unsafe_allow_html=True)
 
-# --- Logic on Button Click ---
-if generate_btn:
-    # Extract only the ID from the selection
-    employee_id_only = st.session_state.employee_id.split(" - ")[0]
-    
-    if not st.session_state.logs_input or not st.session_state.employee_id:
-        st.warning("⚠️ Please enter a prompt and select an employee.")
-    else:
-        # Clear the old download button immediately before showing spinner
-        download_placeholder.empty()
-
-        with st.spinner(f"🔎 Analyzing logs and generating summary for {employee_id_only}..."):
-            try:
-                # 1. API Call Logic
-                payload = {"employee_name": employee_id_only, "logs": st.session_state.logs_input}
-                # response = requests.post(api_endpoint_for_summary_generation, json=payload, timeout=300)
-                # response.raise_for_status() # Raise exception for bad status codes
-                # data = response.json()
-                
-                data=generate_report(payload)
-                st.success("✅ Report generated successfully!")
-                st.write(data["report"])
-                
-                
-                # Check for the report key
-                if 'report' in data:
-                    st.session_state.summary_report = data['report']
-                else:
-                    st.session_state.summary_report = "Error: Report key not found in API response."
-                    st.error(st.session_state.summary_report)
-                    
-            except requests.exceptions.ConnectionError:
-                # 2. Simulated/Fallback Logic if API is unreachable (for demo/testing)
-                st.error("API Connection Error: Could not connect to the backend server. Using a simulated report.")
-                time.sleep(2) 
-                
-                # SIMULATED REPORT DATA
-                st.session_state.summary_report = f"""**Employee ID: {employee_id_only}**
-**Evaluation Date:** October 1, 2025
-
-**Overall Assessment:** The employee has demonstrated strong commitment and technical expertise during this period. The RAG system analysis indicates a significant contribution to key projects.
-
-**Key Strengths:**
-* **Code Quality:** Commits show a low bug rate and good adherence to coding standards.
-* **Collaboration:** Consistently provided clear and constructive feedback in code reviews.
-
-**Areas for Development:**
-* **Time Management:** Needs to improve estimation accuracy for larger tasks to prevent delays.
-* **Knowledge Sharing:** Encourage more internal presentations on new technical findings.
-
-**Recommendation:** Consider for promotion to Senior Developer within the next quarter, pending successful completion of leadership training.
-"""
-            except Exception as e:
-                # 3. General Error
-                st.error(f"❌ An unexpected error occurred: {e}")
-                st.session_state.summary_report = "Summary generation failed due to an error."
-                
-        
-        # After successful generation (or simulation), update the UI in a success block
-        st.success(f"✅ Summary generated successfully for {employee_id_only}!")
-        
-        # 1. Update the Summary Box in the right column using the placeholder
-        updated_summary_box_html = f"<div class='report-box'>{st.session_state.summary_report}</div>"
-        summary_placeholder.markdown(updated_summary_box_html, unsafe_allow_html=True)
-
-        # 2. Re-render the Download button
-        pdf_bytes = create_pdf(st.session_state.summary_report, employee_id_only)
-        
-        with col2:
-            download_placeholder.download_button(
+            pdf_bytes = create_pdf(summary_report, employee_id)
+            st.download_button(
                 label="⬇️ Download Summary as PDF",
                 data=pdf_bytes,
-                file_name=f"performance_summary_{employee_id_only}_{int(time.time())}.pdf",
+                file_name=f"performance_summary_{employee_id}_{int(time.time())}.pdf",
                 mime="application/pdf"
             )
+    else:
+        st.markdown("<div class='report-box'>Summary will appear here after generation.</div>", unsafe_allow_html=True)
