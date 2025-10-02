@@ -4,14 +4,15 @@ import io
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 import time
-from langchain_core.embeddings import Embeddings
-from sentence_transformers import SentenceTransformer
-from langchain.vectorstores import FAISS
+# from langchain_core.embeddings import Embeddings
+# from sentence_transformers import SentenceTransformer
+# from langchain.vectorstores import FAISS
 from langchain.prompts import PromptTemplate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 load_dotenv(override=True)
+from pinecone import Pinecone, ServerlessSpec
 import os
 import re
 import requests
@@ -21,15 +22,30 @@ import requests
 # API_URL = "http://localhost:8000"
 # api_endpoint_for_summary_generation = f"{API_URL}/generate_report"
 
-class SentenceTransformerEmbeddings(Embeddings):
-    def __init__(self, model_name="all-MiniLM-L6-v2"):
-        self.model = SentenceTransformer(model_name)
+# class SentenceTransformerEmbeddings(Embeddings):
+#     def __init__(self, model_name="all-MiniLM-L6-v2"):
+#         self.model = SentenceTransformer(model_name)
 
-    def embed_documents(self, texts):
-        return self.model.encode(texts, show_progress_bar=False)
+#     def embed_documents(self, texts):
+#         return self.model.encode(texts, show_progress_bar=False)
 
-    def embed_query(self, text):
-        return self.model.encode([text])[0]
+#     def embed_query(self, text):
+#         return self.model.encode([text])[0]
+
+# @st.cache_resource  # Cache heavy models/resources once
+# def load_embedding_model():
+#     return SentenceTransformerEmbeddings("all-MiniLM-L6-v2")
+
+@st.cache_resource
+def load_llm():
+    return ChatGoogleGenerativeAI(model="gemini-2.5-flash",google_api_key=os.getenv("GOOGLE_API_KEY"))
+    
+# Pinecone Init
+# -----------------------------
+pc=Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index_name="automated-performance-evaluator-logs"
+index = pc.Index(index_name)
+  
     
 template = """
 You are an HR performance evaluator.
@@ -58,32 +74,76 @@ prompt = PromptTemplate(template=template, input_variables=["employee_id", "cont
 # -----------------------------
 # LLM (Google Generative AI)
 # -----------------------------
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash",google_api_key=os.getenv("GOOGLE_API_KEY"))
+# llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash",google_api_key=os.getenv("GOOGLE_API_KEY"))
 
 # -----------------------------
 # Main pipeline function
 # -----------------------------
+
+def store_logs(employee_id: str, logs: str):
+    """Store logs in Pinecone using MaaS (llama-text-embed-v2)."""
+    splitter = RecursiveCharacterTextSplitter(chunk_size=250, chunk_overlap=100)
+    chunks = splitter.split_text(logs)
+    print(chunks)
+    records = []
+    for i, chunk in enumerate(chunks):
+        records.append({
+            "id": f"vec{i+1}",
+            "text": chunk  # ✅ Must be "text", since Pinecone will embed this
+        })
+    
+    if records:
+        namespace = f"employee-{employee_id}"
+        index.upsert_records(namespace=namespace, records=records)
+
+
+def retrieve_logs(employee_id: str, query: str, top_k: int = 2) -> str:
+    """Retrieve most relevant logs using Pinecone MaaS query."""
+    results = index.search(
+        namespace=f"employee-{employee_id}",
+        # text=query,  # ✅ pass query text directly
+        # top_k=top_k,
+        # filter={"employee_id": {"$eq": employee_id}},
+        # include_metadata=True
+        query={
+            "inputs": {"text": query},
+            "top_k": top_k,
+        }
+    )
+    print("Result is:", results)
+    return "\n".join([m["metadata"].get("chunk_text", "") for m in results.get("matches", [])])
+
+
 def evaluate_employee(employee_id: str, logs: str) -> str:
     """Generate performance evaluation for a given employee from logs."""
 
     # 1. Split logs into chunks
-    splitter = RecursiveCharacterTextSplitter(chunk_size=250, chunk_overlap=100)
-    chunks = splitter.create_documents([logs])
+    # splitter = RecursiveCharacterTextSplitter(chunk_size=250, chunk_overlap=100)
+    # chunks = splitter.create_documents([logs])
 
-    # 2. Build vector store
-    embedding_function = SentenceTransformerEmbeddings()
-    vector_store = FAISS.from_documents(chunks, embedding_function)
+    # # 2. Build vector store
+    # embedding_function = load_embedding_model()
+    # vector_store = FAISS.from_documents(chunks, embedding_function)
 
-    # 3. Retrieve relevant chunks
-    retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10})
-    query = f"Give all the logs for employee {employee_id}"
-    retrieved_docs = retriever.invoke(query)
-    context_text = "\n\n".join(doc.page_content for doc in retrieved_docs)
+    # # 3. Retrieve relevant chunks
+    # retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10})
+    # query = f"Give all the logs for employee {employee_id}"
+    # retrieved_docs = retriever.invoke(query)
+    # context_text = "\n\n".join(doc.page_content for doc in retrieved_docs)
+
+    store_logs(employee_id, logs)
+    
+    print("store_logs ran successfully.")
+
+    # 2. Retrieve relevant chunks for employee
+    query = f"Give all logs for employee {employee_id}"
+    context_text = retrieve_logs(employee_id, query)
 
     # 4. Format final prompt
     final_prompt = prompt.invoke({"employee_id": employee_id, "context": context_text})
 
     # 5. Run LLM
+    llm = load_llm()
     answer = llm.invoke(final_prompt)
 
     return answer.content
@@ -99,6 +159,8 @@ def generate_report(req: dict) -> dict:
     raw_report = evaluate_employee(req["employee_name"], req["logs"])
     report = clean_summary(raw_report)
     return { "report": report}
+
+
 
 
 # Page config
@@ -196,8 +258,6 @@ def create_pdf(summary_text: str, employee_id: str) -> bytes:
     buffer.seek(0)
     return buffer.read()
 # ------------------------------
-
-
 
 # --- Main Two-Column Layout ---
 col1, col2 = st.columns([1, 1.2]) # Input column slightly smaller than Output column
