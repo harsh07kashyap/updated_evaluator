@@ -1,5 +1,4 @@
 import streamlit as st
-import json
 import io
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -15,7 +14,6 @@ load_dotenv(override=True)
 from pinecone import Pinecone, ServerlessSpec
 import os
 import re
-import requests
 
 
 
