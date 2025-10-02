@@ -86,16 +86,18 @@ def store_logs(employee_id: str, logs: str):
     records = []
     for i, chunk in enumerate(chunks):
         records.append({
-            "id": f"vec{i+1}",
+            "id": f"vec{i+1}",  # ✅ Must be "id", since Pinecone will use this as the document ID
             "text": chunk  # ✅ Must be "text", since Pinecone will embed this
+            
         })
     
     if records:
         namespace = f"employee-{employee_id}"
         index.upsert_records(namespace=namespace, records=records)
+        
 
 
-def retrieve_logs(employee_id: str, query: str, top_k: int = 2) -> str:
+def retrieve_logs(employee_id: str, query: str, top_k: int = 4) -> str:
     """Retrieve most relevant logs using Pinecone MaaS query."""
     results = index.search(
         namespace=f"employee-{employee_id}",
@@ -109,7 +111,12 @@ def retrieve_logs(employee_id: str, query: str, top_k: int = 2) -> str:
         }
     )
     print("Result is:", results)
-    return "\n".join([m["metadata"].get("chunk_text", "") for m in results.get("matches", [])])
+    hits = results.get("result", {}).get("hits", [])
+    if not hits:
+        return "No logs found for this employee."
+
+    # ✅ return first hit’s text
+    return hits[0]["fields"]["text"]
 
 
 def evaluate_employee(employee_id: str, logs: str) -> str:
@@ -130,12 +137,14 @@ def evaluate_employee(employee_id: str, logs: str) -> str:
     # context_text = "\n\n".join(doc.page_content for doc in retrieved_docs)
 
     store_logs(employee_id, logs)
-    
     print("store_logs ran successfully.")
+    time.sleep(15)  # Wait for a moment to ensure data is stored
+    print("Fetching logs now...")
 
     # 2. Retrieve relevant chunks for employee
     query = f"Give all logs for employee {employee_id}"
     context_text = retrieve_logs(employee_id, query)
+    print("context_text fetched:", context_text)
 
     # 4. Format final prompt
     final_prompt = prompt.invoke({"employee_id": employee_id, "context": context_text})
